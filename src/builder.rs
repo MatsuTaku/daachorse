@@ -253,7 +253,7 @@ impl DoubleArrayAhoCorasickBuilder {
             states: self.states,
             outputs: nfa.outputs,
             match_kind: self.match_kind,
-            num_states: nfa.states.len() - 1,
+            num_states: nfa.states.len() as u32 - 1,
         })
     }
 

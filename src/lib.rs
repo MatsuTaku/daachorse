@@ -151,9 +151,12 @@ pub mod charwise;
 pub mod errors;
 pub mod iter;
 mod nfa_builder;
+mod utils;
 
 #[cfg(test)]
 mod tests;
+
+use std::io::{self, Read, Write};
 
 pub use builder::DoubleArrayAhoCorasickBuilder;
 use errors::Result;
@@ -237,6 +240,23 @@ impl State {
     pub fn set_output_pos(&mut self, x: u32) {
         self.output_pos = x;
     }
+
+    #[inline(always)]
+    fn serialize<W>(&self, mut wtr: W) -> io::Result<()> where W: Write {
+        utils::write_u32(&mut wtr, self.base)?;
+        utils::write_u32(&mut wtr, self.fach)?;
+        utils::write_u32(&mut wtr, self.output_pos)?;
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn deserialize<R>(mut rdr: R) -> io::Result<Self> where R: Read {
+        Ok(Self {
+            base: utils::read_u32(&mut rdr)?,
+            fach: utils::read_u32(&mut rdr)?,
+            output_pos: utils::read_u32(&mut rdr)?,
+        })
+    }
 }
 
 impl std::fmt::Debug for State {
@@ -278,6 +298,21 @@ impl Output {
     #[inline(always)]
     pub const fn is_begin(self) -> bool {
         self.length & 1 == 1
+    }
+
+    #[inline(always)]
+    fn serialize<W>(&self, mut wtr: W) -> io::Result<()> where W: Write {
+        utils::write_u32(&mut wtr, self.value)?;
+        utils::write_u32(&mut wtr, self.length)?;
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn deserialize<R>(mut rdr: R) -> io::Result<Self> where R: Read {
+        Ok(Self {
+            value: utils::read_u32(&mut rdr)?,
+            length: utils::read_u32(&mut rdr)?,
+        })
     }
 }
 
@@ -351,7 +386,7 @@ pub struct DoubleArrayAhoCorasick {
     states: Vec<State>,
     outputs: Vec<Output>,
     match_kind: MatchKind,
-    num_states: usize,
+    num_states: u32,
 }
 
 impl DoubleArrayAhoCorasick {
@@ -846,8 +881,48 @@ impl DoubleArrayAhoCorasick {
     ///
     /// assert_eq!(pma.num_states(), 6);
     /// ```
-    pub const fn num_states(&self) -> usize {
+    pub const fn num_states(&self) -> u32 {
         self.num_states
+    }
+
+    pub fn serialize<W>(&self, mut wtr: W) -> io::Result<()> where W: Write {
+        utils::write_u32(&mut wtr, self.states.len() as u32)?;
+        for state in &self.states {
+            state.serialize(&mut wtr)?;
+        }
+        utils::write_u32(&mut wtr, self.outputs.len() as u32)?;
+        for output in &self.outputs {
+            output.serialize(&mut wtr)?;
+        }
+        utils::write_u8(&mut wtr, self.match_kind as u8)?;
+        utils::write_u32(&mut wtr, self.num_states)?;
+        Ok(())
+    }
+
+    pub fn deserialize<R>(mut rdr: R) -> io::Result<Self> where R: Read {
+        let states_len = utils::read_u32(&mut rdr)? as usize;
+        let mut states = Vec::with_capacity(states_len);
+        for _ in 0..states_len {
+            states.push(State::deserialize(&mut rdr)?);
+        }
+        let outputs_len = utils::read_u32(&mut rdr)? as usize;
+        let mut outputs = Vec::with_capacity(outputs_len);
+        for _ in 0..outputs_len {
+            outputs.push(Output::deserialize(&mut rdr)?);
+        }
+        let match_kind = MatchKind::from(utils::read_u8(&mut rdr)?);
+        let num_states = utils::read_u32(&mut rdr)?;
+
+        if !validate(&states, &outputs, match_kind.is_leftmost()) {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid automaton"));
+        }
+
+        Ok(Self {
+            states,
+            outputs,
+            match_kind,
+            num_states,
+        })
     }
 
     /// # Safety
@@ -920,6 +995,7 @@ impl DoubleArrayAhoCorasick {
 /// An search option of the Aho-Corasick automaton
 /// specified in [`DoubleArrayAhoCorasickBuilder::match_kind`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
 pub enum MatchKind {
     /// The standard match semantics, which enables
     /// [`find_iter()`](DoubleArrayAhoCorasick::find_iter()),\
@@ -927,21 +1003,21 @@ pub enum MatchKind {
     /// [`find_overlapping_no_suffix_iter()`](DoubleArrayAhoCorasick::find_overlapping_no_suffix_iter()).
     /// Patterns are reported in the order that follows the normal behaviour of the Aho-Corasick
     /// algorithm.
-    Standard,
+    Standard = 0,
 
     /// The leftmost-longest match semantics, which enables
     /// [`leftmost_find_iter()`](DoubleArrayAhoCorasick::leftmost_find_iter()).
     /// When multiple patterns are started from the same positions, the longest pattern will be
     /// reported. For example, when matching patterns `ab|a|abcd` over `abcd`, `abcd` will be
     /// reported.
-    LeftmostLongest,
+    LeftmostLongest = 1,
 
     /// The leftmost-first match semantics, which enables
     /// [`leftmost_find_iter()`](DoubleArrayAhoCorasick::leftmost_find_iter()).
     /// When multiple patterns are started from the same positions, the pattern that is registered
     /// earlier will be reported. For example, when matching patterns `ab|a|abcd` over `abcd`,
     /// `ab` will be reported.
-    LeftmostFirst,
+    LeftmostFirst = 2,
 }
 
 impl MatchKind {
@@ -955,6 +1031,16 @@ impl MatchKind {
 
     pub(crate) fn is_leftmost_first(self) -> bool {
         self == Self::LeftmostFirst
+    }
+}
+
+impl From<u8> for MatchKind {
+    fn from(src: u8) -> Self {
+        match src {
+            1 => Self::LeftmostLongest,
+            2 => Self::LeftmostFirst,
+            _ => Self::Standard,
+        }
     }
 }
 
@@ -1020,7 +1106,7 @@ fn validate(states: &[State], outputs: &[Output], is_leftmost: bool) -> bool {
         }
     }
 
-    // Checks that the length of suffix is shorter.
+    // Checks that suffix patterns have shorter lengths.
     let mut prev_length = 0;
     for output in outputs {
         let length = output.length();

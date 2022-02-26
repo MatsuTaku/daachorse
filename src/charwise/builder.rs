@@ -150,7 +150,7 @@ impl CharwiseDoubleArrayAhoCorasickBuilder {
         P: AsRef<str>,
     {
         let nfa = self.build_original_nfa(patvals)?;
-        let num_states = nfa.states.len() - 1; // -1 is for dead state
+        let num_states = nfa.states.len() as u32 - 1; // -1 is for dead state
 
         self.build_double_array(&nfa)?;
 

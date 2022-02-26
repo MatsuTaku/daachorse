@@ -45,6 +45,8 @@
 pub mod builder;
 pub mod iter;
 
+use std::io::{self, Read, Write};
+
 pub use crate::charwise::builder::CharwiseDoubleArrayAhoCorasickBuilder;
 use crate::charwise::iter::{
     CharWithEndOffsetIterator, FindIterator, FindOverlappingIterator,
@@ -52,6 +54,7 @@ use crate::charwise::iter::{
 };
 use crate::errors::Result;
 use crate::{MatchKind, Output};
+use crate::utils;
 
 // The maximum BASE value used as an invalid value.
 pub(crate) const BASE_INVALID: i32 = std::i32::MAX;
@@ -79,7 +82,7 @@ pub struct CharwiseDoubleArrayAhoCorasick {
     states: Vec<State>,
     outputs: Vec<Output>,
     match_kind: MatchKind,
-    num_states: usize,
+    num_states: u32,
 }
 
 impl CharwiseDoubleArrayAhoCorasick {
@@ -569,7 +572,7 @@ impl CharwiseDoubleArrayAhoCorasick {
     ///
     /// assert_eq!(pma.num_states(), 6);
     /// ```
-    pub const fn num_states(&self) -> usize {
+    pub const fn num_states(&self) -> u32 {
         self.num_states
     }
 
@@ -604,6 +607,46 @@ impl CharwiseDoubleArrayAhoCorasick {
     pub fn heap_bytes(&self) -> usize {
         self.states.len() * std::mem::size_of::<State>()
             + self.outputs.len() * std::mem::size_of::<Output>()
+    }
+
+    pub fn serialize<W>(&self, mut wtr: W) -> io::Result<()> where W: Write {
+        utils::write_u32(&mut wtr, self.states.len() as u32)?;
+        for state in &self.states {
+            state.serialize(&mut wtr)?;
+        }
+        utils::write_u32(&mut wtr, self.outputs.len() as u32)?;
+        for output in &self.outputs {
+            output.serialize(&mut wtr)?;
+        }
+        utils::write_u8(&mut wtr, self.match_kind as u8)?;
+        utils::write_u32(&mut wtr, self.num_states)?;
+        Ok(())
+    }
+
+    pub fn deserialize<R>(mut rdr: R) -> io::Result<Self> where R: Read {
+        let states_len = utils::read_u32(&mut rdr)? as usize;
+        let mut states = Vec::with_capacity(states_len);
+        for _ in 0..states_len {
+            states.push(State::deserialize(&mut rdr)?);
+        }
+        let outputs_len = utils::read_u32(&mut rdr)? as usize;
+        let mut outputs = Vec::with_capacity(outputs_len);
+        for _ in 0..outputs_len {
+            outputs.push(Output::deserialize(&mut rdr)?);
+        }
+        let match_kind = MatchKind::from(utils::read_u8(&mut rdr)?);
+        let num_states = utils::read_u32(&mut rdr)?;
+
+        if !validate(&states, &outputs, match_kind.is_leftmost()) {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid automaton"));
+        }
+
+        Ok(Self {
+            states,
+            outputs,
+            match_kind,
+            num_states,
+        })
     }
 
     /// # Safety
@@ -726,6 +769,25 @@ impl State {
     pub fn set_output_pos(&mut self, x: u32) {
         self.output_pos = x;
     }
+
+    #[inline(always)]
+    fn serialize<W>(&self, mut wtr: W) -> io::Result<()> where W: Write {
+        utils::write_i32(&mut wtr, self.base)?;
+        utils::write_u32(&mut wtr, self.check)?;
+        utils::write_u32(&mut wtr, self.fail)?;
+        utils::write_u32(&mut wtr, self.output_pos)?;
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn deserialize<R>(mut rdr: R) -> io::Result<Self> where R: Read {
+        Ok(Self {
+            base: utils::read_i32(&mut rdr)?,
+            check: utils::read_u32(&mut rdr)?,
+            fail: utils::read_u32(&mut rdr)?,
+            output_pos: utils::read_u32(&mut rdr)?,
+        })
+    }
 }
 
 fn validate(states: &[State], outputs: &[Output], is_leftmost: bool) -> bool {
@@ -753,9 +815,6 @@ fn validate(states: &[State], outputs: &[Output], is_leftmost: bool) -> bool {
     let mut depths = vec![0; states.len()];
     for (mut state_id, mut state) in states.iter().enumerate() {
         if state.check() == DEAD_STATE_IDX {
-            continue;
-        }
-        if state.base().is_none() && state.output_pos().is_none() {
             continue;
         }
         stack.clear();
@@ -799,7 +858,7 @@ fn validate(states: &[State], outputs: &[Output], is_leftmost: bool) -> bool {
         }
     }
 
-    // Checks that the length of suffix is shorter.
+    // Checks that suffix patterns have shorter lengths.
     let mut prev_length = 0;
     for output in outputs {
         let length = output.length();
