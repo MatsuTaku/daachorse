@@ -727,3 +727,86 @@ impl State {
         self.output_pos = x;
     }
 }
+
+fn validate(states: &[State], outputs: &[Output], is_leftmost: bool) -> bool {
+    // Checks the following constraints:
+    //  - state.check() < states.len()
+    //  - state.fail() < states.len()
+    //  - state.output_pos() < outputs.len()
+    for state in states {
+        if state.check() as usize >= states.len() {
+            return false;
+        }
+        if state.fail() as usize >= states.len() && !(is_leftmost && state.fail() == DEAD_STATE_IDX)
+        {
+            return false;
+        }
+        if let Some(output_pos) = state.output_pos() {
+            if output_pos as usize >= outputs.len() {
+                return false;
+            }
+        }
+    }
+
+    // Checks that the length is less than or equal to the depth.
+    let mut stack = vec![];
+    let mut depths = vec![0; states.len()];
+    for (mut state_id, mut state) in states.iter().enumerate() {
+        if state.check() == DEAD_STATE_IDX {
+            continue;
+        }
+        if state.base().is_none() && state.output_pos().is_none() {
+            continue;
+        }
+        stack.clear();
+        let depth_base = loop {
+            let depth = unsafe { depths.get_unchecked_mut(state_id) };
+            if state_id == 0 || *depth != 0 {
+                break *depth;
+            }
+            *depth = 1;
+            let child_state_id = state_id;
+            state_id = state.check() as usize;
+            state = unsafe { states.get_unchecked(state_id) };
+            if let Some(base) = state.base() {
+                stack.push((child_state_id, (child_state_id as i32 - base) as u32));
+            } else {
+                return false;
+            }
+        };
+        let mut len_utf8 = 0;
+        for &(state_id, c) in stack.iter().rev() {
+            unsafe {
+                if let Some(c) = char::from_u32(c) {
+                    len_utf8 += c.len_utf8();
+                } else {
+                    return false;
+                }
+                *depths.get_unchecked_mut(state_id) = depth_base + len_utf8;
+            }
+        }
+    }
+    for (state, depth) in states.iter().zip(&depths) {
+        if state.check() == DEAD_STATE_IDX {
+            continue;
+        }
+        if let Some(output_pos) = state.output_pos() {
+            unsafe {
+                if outputs.get_unchecked(output_pos as usize).length() as usize > *depth {
+                    return false;
+                }
+            }
+        }
+    }
+
+    // Checks that the length of suffix is shorter.
+    let mut prev_length = 0;
+    for output in outputs {
+        let length = output.length();
+        if !output.is_begin() && length >= prev_length {
+            return false;
+        }
+        prev_length = length;
+    }
+    true
+}
