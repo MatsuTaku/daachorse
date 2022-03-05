@@ -16,6 +16,18 @@ const SEARCH_SAMPLE_SIZE: usize = 30;
 const SEARCH_WARM_UP_TIME: Duration = Duration::from_secs(5);
 const SEARCH_MEASURE_TIME: Duration = Duration::from_secs(10);
 
+fn criterion_words100000_deserialize(c: &mut Criterion) {
+    let mut group = c.benchmark_group("words_100000/deserialize");
+    group.sample_size(BUILD_SAMPLE_SIZE);
+    group.warm_up_time(BUILD_WARM_UP_TIME);
+    group.measurement_time(BUILD_MEASURE_TIME);
+    group.sampling_mode(SamplingMode::Flat);
+    let mut patterns = load_file("data/words_100000");
+    patterns.sort_unstable();
+
+    add_deserialize_benches(&mut group, &patterns);
+}
+
 fn criterion_words100000_build(c: &mut Criterion) {
     let mut group = c.benchmark_group("words_100000/build");
     group.sample_size(BUILD_SAMPLE_SIZE);
@@ -130,6 +142,18 @@ fn criterion_words100000_leftmost_first_find(c: &mut Criterion) {
     let haystacks = load_file("data/sherlock.txt");
 
     add_leftmost_first_find_benches(&mut group, &patterns, &haystacks);
+}
+
+fn add_deserialize_benches(group: &mut BenchmarkGroup<WallTime>, patterns: &[String]) {
+    let serialized = daachorse::DoubleArrayAhoCorasick::new(patterns).unwrap().serialize_to_vec();
+    group.bench_function("daachorse", |b| {
+        b.iter(|| unsafe { daachorse::DoubleArrayAhoCorasick::deserialize_from_slice_unchecked(&serialized) });
+    });
+
+    let serialized = daachorse::charwise::CharwiseDoubleArrayAhoCorasick::new(patterns).unwrap().serialize_to_vec();
+    group.bench_function("daachorse/charwise", |b| {
+        b.iter(|| unsafe { daachorse::charwise::CharwiseDoubleArrayAhoCorasick::deserialize_from_slice_unchecked(&serialized) });
+    });
 }
 
 fn add_build_benches(group: &mut BenchmarkGroup<WallTime>, patterns: &[String]) {
@@ -600,5 +624,6 @@ criterion_group!(
     criterion_words100000_leftmost_longest_find,
     criterion_words100000_leftmost_first_find,
     criterion_words100000_build,
+    criterion_words100000_deserialize,
 );
 criterion_main!(benches);
