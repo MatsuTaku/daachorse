@@ -168,7 +168,7 @@ mod tests;
 #[cfg(feature = "std")]
 use std::io::{self, Read, Write};
 
-use core::mem;
+use core::mem::{self, MaybeUninit};
 
 use alloc::vec::Vec;
 
@@ -1101,26 +1101,26 @@ impl DoubleArrayAhoCorasick {
     pub unsafe fn deserialize_from_slice_unchecked(mut source: &[u8]) -> Self {
         let states_len = u32::from_le_bytes(source[0..4].try_into().unwrap()) as usize;
         source = &source[4..];
-        let mut states = Vec::with_capacity(states_len);
-        for _ in 0..states_len {
-            states.push(State::deserialize(source[0..12].try_into().unwrap()));
-            source = &source[12..];
+        let mut states = vec![MaybeUninit::<State>::uninit(); states_len];
+        for (state_bytes, state) in source.chunks_exact(12).zip(&mut states) {
+            state.write(State::deserialize(state_bytes.try_into().unwrap()));
         }
+        source = &source[12 * states_len..];
         let outputs_len = u32::from_le_bytes(source[0..4].try_into().unwrap()) as usize;
         source = &source[4..];
-        let mut outputs = Vec::with_capacity(outputs_len);
-        for _ in 0..outputs_len {
-            outputs.push(Output::deserialize(source[0..8].try_into().unwrap()));
-            source = &source[8..];
+        let mut outputs = vec![MaybeUninit::<Output>::uninit(); outputs_len];
+        for (output_bytes, output) in source.chunks_exact(8).zip(&mut outputs) {
+            output.write(Output::deserialize(output_bytes.try_into().unwrap()));
         }
+        source = &source[8 * outputs_len..];
 
         let match_kind = MatchKind::from(source[0]);
         let num_states_array: [u8; 4] = source[1..5].try_into().unwrap();
         let num_states = u32::from_le_bytes(num_states_array) as usize;
 
         Self {
-            states,
-            outputs,
+            states: mem::transmute(states),
+            outputs: mem::transmute(outputs),
             match_kind,
             num_states,
         }
