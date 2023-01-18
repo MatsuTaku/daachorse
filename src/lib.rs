@@ -185,6 +185,8 @@ compile_error!("`target_pointer_width` must be larger than or equal to 32");
 extern crate alloc;
 
 mod build_helper;
+mod bitmap;
+mod bpxcheck;
 pub mod bytewise;
 pub mod charwise;
 pub mod errors;
