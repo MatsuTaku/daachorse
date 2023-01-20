@@ -98,6 +98,11 @@ impl BuildHelper {
         }
     }
 
+    #[inline(always)]
+    pub fn head_word_idx(&self) -> Option<u32> {
+        Some(self.head_idx? / 64)
+    }
+
     pub fn last_vacant_index_in_word(&self, word_idx: u32) -> u32 {
         let w = self.xchecker.get_state_mask(self.word_offset(word_idx) as usize);
         debug_assert_ne!(w, BPXChecker::NO_CANDIDATE);
@@ -262,12 +267,12 @@ impl BuildHelper {
     }
 
     #[inline(always)]
-    pub fn verify_base_64adjacent(&self, base: u32, edges: &[(u32, u32)]) -> Option<NonZeroU32> {
+    pub fn verify_unique_base_64adjacent_tuple_label(&self, base: u32, edges: &[(u32, u32)]) -> Option<NonZeroU32> {
         let base_offset = self.offset(base) as u32;
-        if let Some(valid_base_offset) = self.xchecker.find_base_for_64adjacent_xor(base_offset as u64, edges) {
+        if let Some(valid_base_offset) = self.xchecker.find_unique_base_for_64adjacent_xor_tuple_label(base_offset as u64, edges) {
             let exact_base = (base - base_offset) + valid_base_offset as u32;
             debug_assert_ne!(exact_base, 0,
-                             "You should use self.use_base_zero() at init_array()");
+                             "You should use self.use_base_zero() at initialization.");
             return NonZeroU32::new(exact_base);
         }
         None
@@ -279,7 +284,7 @@ impl BuildHelper {
         if let Some(valid_base_offset) = self.xchecker.find_unique_base_for_64adjacent_xor(base_offset as u64, labels) {
             let exact_base = (base - base_offset) + valid_base_offset as u32;
             debug_assert_ne!(exact_base, 0,
-                             "You should use self.use_base_zero() at init_array()");
+                             "You should use self.use_base_zero() at initialization.");
             return NonZeroU32::new(exact_base);
         }
         None

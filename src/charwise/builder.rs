@@ -276,7 +276,12 @@ impl CharwiseDoubleArrayAhoCorasickBuilder {
             }
             mapped.sort_by(|(c1, _), (c2, _)| c1.cmp(c2));
 
-            let base = self.find_base(&mapped, &helper);
+            // slow
+            // let base = self.find_base(&mapped, &helper);
+            // faster
+            // let base = self.find_base_64_with_elm(&mapped, &helper);
+            // fastest
+            let base = self.find_base_64_sequential(&mapped, &helper);
             if self.states.len() <= usize::from_u32(base.get()) {
                 self.extend_array(&mut helper)?;
             }
@@ -325,6 +330,7 @@ impl CharwiseDoubleArrayAhoCorasickBuilder {
         helper.push_block().unwrap();
         helper.use_index(ROOT_STATE_IDX);
         helper.use_index(DEAD_STATE_IDX);
+        helper.use_base_zero();
         Ok(helper)
     }
 
@@ -353,6 +359,46 @@ impl CharwiseDoubleArrayAhoCorasickBuilder {
             }
         }
         NonZeroU32::new(base)
+    }
+
+    /// Find base that be able to store `edges` and unique for other bases and non-zero.
+    ///
+    /// Note: return value is "minimum value of valid bases" so it may  be different value to find_base
+    ///
+    /// We recommend to use this function instead of find_base_64_with_elm because find_base_64_sequential is faster than find_base_64_with_elm in practice.
+    ///
+    /// Complexity: O(|labels| (N/w) log w) where w is word length of calculator a.k.a. 64 and N is size of capacity of `helper`
+    #[inline(always)]
+    fn find_base_64_sequential(&self, edges: &[(u32, u32)], helper: &BuildHelper) -> NonZeroU32 {
+        if let Some(word_head) = helper.head_word_idx() {
+            for word_idx in word_head..(helper.active_index_range().end+63)/64 {
+                let base_pin = word_idx * 64 ^ edges[0].0;
+                if let Some(base) = helper.verify_unique_base_64adjacent_tuple_label(base_pin, edges) {
+                    return base
+                }
+            }
+        }
+        // len() is not 0 since states has at least BLOCK_LEN items.
+        NonZeroU32::new(u32::try_from(self.states.len()).unwrap()).unwrap()
+    }
+
+    /// Find base that be able to store `labels` and unique for other bases and non-zero.
+    ///
+    /// Note: return value is "minimum value of valid bases" so it may  be different value to find_base
+    ///
+    /// This algorithm combines bit-parallel xcheck and empty-link method, so it can skip 64bit chunk if all of indexes in any word is used. (But this skip action happens very rarely, so we recommend to use find_base_64_sequential instead find_base_64_with_elm)
+    ///
+    /// Complexity: O(|labels| E log w) where w is word length of calculator a.k.a. 64, E = O(N/w) is number of words including vacant index and N is size of capacity of `helper`
+    #[inline(always)]
+    fn find_base_64_with_elm(&self, edges: &[(u32, u32)], helper: &BuildHelper) -> NonZeroU32 {
+        for word_idx in helper.vacant_word_iter() {
+            let base_pin = word_idx * 64 ^ edges[0].0;
+            if let Some(base) = helper.verify_unique_base_64adjacent_tuple_label(base_pin, edges) {
+                return base
+            }
+        }
+        // len() is not 0 since states has at least BLOCK_LEN items.
+        NonZeroU32::new(u32::try_from(self.states.len()).unwrap()).unwrap()
     }
 
     #[inline(always)]

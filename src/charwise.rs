@@ -863,8 +863,7 @@ impl Serializable for State {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_double_array() {
+    fn test_double_array_with_normal_xcheck() {
         /*
          *          Ａ--> 4
          *         /
@@ -931,6 +930,81 @@ mod tests {
         assert_eq!(base_expected, pma_base);
         assert_eq!(check_expected, pma_check);
         assert_eq!(fail_expected, pma_fail);
+    }
+
+    fn test_double_array_with_bitparallel_xcheck() {
+        /*
+         *          Ａ--> 4
+         *         /
+         *   Ａ--> 1 --Ｃ--> 5
+         *  /
+         * 0 --Ｂ--> 3 --Ｃ--> 6
+         *  \
+         *   Ｃ--> 2
+         *
+         *   Ａ= 0
+         *   Ｃ= 1
+         *   Ｂ= 2
+         */
+        let patterns = vec!["ＡＡ", "ＡＣ", "ＢＣ", "Ｃ"];
+        let pma = CharwiseDoubleArrayAhoCorasick::<u32>::new(patterns).unwrap();
+
+        let base_expected = vec![
+            NonZeroU32::new(4), // 0  (state=0)
+            None,               // 1  (reserved)
+            None,               // 2
+            None,               // 3  (state=6)
+            NonZeroU32::new(8), // 4  (state=1)
+            None,               // 5  (state=2)
+            NonZeroU32::new(2), // 6  (state=3)
+            None,               // 7
+            None,               // 8  (state=4)
+            None,               // 9  (state=5)
+            None,               // 10
+        ];
+        let check_expected = vec![
+            1, // 0  (state=0)
+            1, // 1
+            1, // 2
+            6, // 3  (state=6)
+            0, // 4  (state=1)
+            0, // 5  (state=2)
+            0, // 6  (state=3)
+            1, // 7
+            4, // 8  (state=4)
+            4, // 9  (state=5)
+            1, // 10
+        ];
+        let fail_expected = vec![
+            ROOT_STATE_IDX, // 0  (state=0)
+            DEAD_STATE_IDX, // 1  (reserved)
+            DEAD_STATE_IDX, // 2
+            5,              // 3  (state=6)
+            ROOT_STATE_IDX, // 4  (state=1)
+            ROOT_STATE_IDX, // 5  (state=2)
+            ROOT_STATE_IDX, // 6  (state=3)
+            DEAD_STATE_IDX, // 7
+            4,              // 8  (state=4)
+            5,              // 9  (state=5)
+            DEAD_STATE_IDX, // 10
+        ];
+
+        let pma_base: Vec<_> = pma.states[0..11].iter().map(|state| state.base()).collect();
+        let pma_check: Vec<_> = pma.states[0..11]
+            .iter()
+            .map(|state| state.check())
+            .collect();
+        let pma_fail: Vec<_> = pma.states[0..11].iter().map(|state| state.fail()).collect();
+
+        assert_eq!(base_expected, pma_base);
+        assert_eq!(check_expected, pma_check);
+        assert_eq!(fail_expected, pma_fail);
+    }
+
+    #[test]
+    fn test_double_array() {
+        // test_double_array_with_normal_xcheck();
+        test_double_array_with_bitparallel_xcheck();
     }
 
     #[test]

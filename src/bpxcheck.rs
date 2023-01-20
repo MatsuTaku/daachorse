@@ -220,9 +220,9 @@ impl BPXChecker {
     /// Complexity:
     ///     O(|labels| log w) where w is word size (w=64)
     #[inline(always)]
-    pub fn find_base_for_64adjacent_xor(&self, base_origin: u64, edges: &[(u32, u32)]) -> Option<u64> {
+    pub fn find_unique_base_for_64adjacent_xor_tuple_label(&self, base_origin: u64, edges: &[(u32, u32)]) -> Option<u64> {
         let base_front = base_origin & BPXChecker::BASE_FRONT_MASK;
-        let x = self.disabled_base_mask_xor(base_front,
+        let x = self.disabled_base_mask_xor_unique_base(base_front,
                                             FirstIterator::new(edges));
         if x != BPXChecker::NO_CANDIDATE {
             // Return minimum base of valid bases
