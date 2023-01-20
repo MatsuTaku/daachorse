@@ -58,8 +58,13 @@ impl BPXChecker {
     }
 
     #[inline(always)]
-    pub fn state_fixed(&self, i: usize) -> bool {
-        self.map.get_bit(i)
+    pub fn set_base_word(&mut self, word_idx: usize, word: u64) {
+        self.basemap.set_word_direct(word_idx, word);
+    }
+
+    #[inline(always)]
+    pub fn set_state_word(&mut self, word_idx: usize, word: u64) {
+        self.map.set_word_direct(word_idx, word);
     }
 
     #[inline(always)]
@@ -68,13 +73,28 @@ impl BPXChecker {
     }
 
     #[inline(always)]
-    pub fn set_state_fixed(&mut self, i: usize) {
-        self.map.set_bit(i, true);
+    pub fn state_fixed(&self, i: usize) -> bool {
+        self.map.get_bit(i)
     }
 
     #[inline(always)]
     pub fn set_base_fixed(&mut self, i: usize) {
         self.basemap.set_bit(i, true);
+    }
+
+    #[inline(always)]
+    pub fn set_state_fixed(&mut self, i: usize) {
+        self.map.set_bit(i, true);
+    }
+
+    #[inline(always)]
+    pub fn reset_base(&mut self, i: usize) {
+        self.basemap.set_bit(i, false);
+    }
+
+    #[inline(always)]
+    pub fn reset_state(&mut self, i: usize) {
+        self.map.set_bit(i, false);
     }
 
     #[inline(always)]

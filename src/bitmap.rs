@@ -67,6 +67,11 @@ impl Bitmap64 {
         self.map[wi] = Bitmap64::word_filled_by(bit);
     }
 
+    #[inline(always)]
+    pub fn set_word_direct(&mut self, wi: usize, word: u64) {
+        self.map[wi] = word;
+    }
+
     /// Get 64bit bit-sequence beginning from index `i`
     #[cfg(test)] // Used for plus-operated double-array implementation
     #[inline(always)]
