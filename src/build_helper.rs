@@ -3,6 +3,7 @@ use core::ops::Range;
 
 use alloc::vec::Vec;
 
+use crate::bpxcheck::BPXChecker;
 use crate::errors::{DaachorseError, Result};
 use crate::utils::FromU32;
 
@@ -19,6 +20,9 @@ pub struct BuildHelper {
     num_free_blocks: u32,
     num_blocks: u32,
     head_idx: Option<u32>,
+    xchecker: BPXChecker,
+    num_words_in_block: u32,
+    num_blocks_in_word: u32,
 }
 
 impl BuildHelper {
@@ -40,6 +44,9 @@ impl BuildHelper {
             num_free_blocks,
             num_blocks: 0,
             head_idx: None,
+            xchecker: BPXChecker::new(capacity),
+            num_words_in_block: block_len / 64,
+            num_blocks_in_word: 64 / block_len,
         })
     }
 
@@ -71,12 +78,40 @@ impl BuildHelper {
         }
     }
 
+    /// Creates an iterator to visit 64bit block including vacant indices in the active blocks.
+    #[inline(always)]
+    pub const fn vacant_word_iter(&self) -> VacantWordIter {
+        VacantWordIter {
+            list: self,
+            word_idx: if let Some(head_idx) = self.head_idx {
+                Some(head_idx / 64)
+            } else {
+                None
+            },
+        }
+    }
+
+    pub fn last_vacant_index_in_word(&self, word_idx: u32) -> u32 {
+        let w = self.xchecker.get_state_mask(self.word_offset(word_idx) as usize);
+        debug_assert_ne!(w, BPXChecker::NO_CANDIDATE);
+        word_idx * 64 + 63 - w.leading_ones()
+    }
+
     /// Gets an unused BASE value in the block.
     #[inline(always)]
     pub fn unused_base_in_block(&self, block_idx: u32) -> Option<u32> {
-        let start = block_idx * self.block_len;
-        let end = start + self.block_len;
-        (start..end).find(|&base| !self.is_used_base(base))
+        if block_idx == 0 {
+            return Some(0u32); // Because valid base is type of NonZeroU32
+        }
+        let start = block_idx * self.num_words_in_block;
+        let end = start + self.num_words_in_block;
+        for wi in start..end {
+            let w = self.xchecker.get_base_mask(self.word_offset(wi));
+            if w != BPXChecker::NO_CANDIDATE {
+                return Some(wi * 64 + w.trailing_ones());
+            }
+        }
+        None
     }
 
     /// Checks if the BASE value is used.
@@ -86,7 +121,7 @@ impl BuildHelper {
     /// Panic will arise if active_index_range().contains(&base) == false.
     #[inline(always)]
     pub fn is_used_base(&self, base: u32) -> bool {
-        self.get_ref(base).is_used_base()
+        self.xchecker.base_fixed(self.offset(base))
     }
 
     /// Checks if the index is used.
@@ -96,7 +131,7 @@ impl BuildHelper {
     /// Panic will arise if active_index_range().contains(&idx) == false.
     #[inline(always)]
     pub fn is_used_index(&self, idx: u32) -> bool {
-        self.get_ref(idx).is_used_index()
+        self.xchecker.state_fixed(self.offset(idx))
     }
 
     /// Uses the BASE value.
@@ -106,7 +141,13 @@ impl BuildHelper {
     /// Panic will arise if active_index_range().contains(&base) == false.
     #[inline(always)]
     pub fn use_base(&mut self, base: NonZeroU32) {
-        self.get_mut(base.get()).use_base();
+        self.xchecker.set_base_fixed(self.offset(base.get()));
+    }
+
+    /// Use to be consistent for NonZeroU32 base
+    #[inline(always)]
+    pub fn use_base_zero(&mut self) {
+        self.xchecker.set_base_fixed(0);
     }
 
     /// Uses the index.
@@ -116,8 +157,8 @@ impl BuildHelper {
     /// Panic will arise if active_index_range().contains(&idx) == false.
     #[inline(always)]
     pub fn use_index(&mut self, idx: u32) {
-        debug_assert!(!self.get_ref(idx).is_used_index());
-        self.get_mut(idx).use_index();
+        debug_assert!(!self.xchecker.state_fixed(self.offset(idx)));
+        self.xchecker.set_state_fixed(self.offset(idx));
 
         let next = self.get_mut(idx).next();
         let prev = self.get_mut(idx).prev();
@@ -126,6 +167,23 @@ impl BuildHelper {
 
         if self.head_idx.unwrap() == idx {
             self.head_idx = Some(next).filter(|&x| x != idx);
+        }
+    }
+
+    fn use_64indexes(&mut self, word_idx: u32) {
+        let w = self.xchecker.get_state_mask(self.word_offset(word_idx) as usize);
+        if w == BPXChecker::NO_CANDIDATE {
+            return
+        }
+        self.xchecker.set_64states_fixed(self.word_offset(word_idx) as usize);
+
+        let next = self.get_mut(word_idx * 64 + 63 - w.leading_ones()).next();
+        let prev = self.get_mut(word_idx * 64 + w.trailing_ones()).prev();
+        *self.get_mut(prev).next_mut() = next;
+        *self.get_mut(next).prev_mut() = prev;
+
+        if self.head_idx.unwrap() / 64 == word_idx {
+            self.head_idx = Some(next).filter(|&x| x / 64 != word_idx);
         }
     }
 
@@ -141,7 +199,7 @@ impl BuildHelper {
                 if end_idx <= head_idx {
                     break;
                 }
-                self.use_index(head_idx);
+                self.use_64indexes(head_idx / 64);
             }
         }
 
@@ -155,6 +213,9 @@ impl BuildHelper {
             self.reset(idx);
             *self.get_mut(idx).next_mut() = idx + 1;
             *self.get_mut(idx).prev_mut() = idx.wrapping_sub(1);
+        }
+        for word_idx in old_len/64..new_len/64 {
+            self.reset_64elements(word_idx);
         }
 
         if let Some(head_idx) = self.head_idx {
@@ -184,9 +245,19 @@ impl BuildHelper {
     }
 
     #[inline(always)]
+    fn word_capacity(&self) -> u32 {
+        u32::try_from(self.items.len() / 64).unwrap()
+    }
+
+    #[inline(always)]
     fn reset(&mut self, idx: u32) {
         let offset = self.offset(idx);
         self.items[offset] = ListItem::default();
+    }
+
+    #[inline(always)]
+    fn reset_64elements(&mut self, word_idx: u32) {
+        self.xchecker.reset_64elements(self.word_offset(word_idx) as usize);
     }
 
     #[inline(always)]
@@ -204,6 +275,36 @@ impl BuildHelper {
     fn offset(&self, idx: u32) -> usize {
         assert!(self.active_index_range().contains(&idx));
         usize::from_u32(idx % self.capacity())
+    }
+
+    #[inline(always)]
+    fn word_offset(&self, word_idx: u32) -> usize {
+        assert!(self.active_index_range().contains(&(word_idx * 64)));
+        usize::from_u32(word_idx % self.word_capacity())
+    }
+
+    #[inline(always)]
+    pub fn verify_base_64adjacent(&self, base: u32, edges: &[(u32, u32)]) -> Option<NonZeroU32> {
+        let base_offset = self.offset(base) as u32;
+        if let Some(valid_base_offset) = self.xchecker.find_base_for_64adjacent_xor(base_offset as u64, edges) {
+            let exact_base = (base - base_offset) + valid_base_offset as u32;
+            debug_assert_ne!(exact_base, 0,
+                             "You should use self.use_base_zero() at init_array()");
+            return NonZeroU32::new(exact_base);
+        }
+        None
+    }
+
+    #[inline(always)]
+    pub fn verify_unique_base_64adjacent(&self, base: u32, labels: &[u8]) -> Option<NonZeroU32> {
+        let base_offset = self.offset(base) as u32;
+        if let Some(valid_base_offset) = self.xchecker.find_unique_base_for_64adjacent_xor(base_offset as u64, labels) {
+            let exact_base = (base - base_offset) + valid_base_offset as u32;
+            debug_assert_ne!(exact_base, 0,
+                             "You should use self.use_base_zero() at init_array()");
+            return NonZeroU32::new(exact_base);
+        }
+        None
     }
 }
 
@@ -226,12 +327,38 @@ impl Iterator for VacantIter<'_> {
     }
 }
 
+pub struct VacantWordIter<'a> {
+    list: &'a BuildHelper,
+    word_idx: Option<u32>,
+}
+
+impl Iterator for VacantWordIter<'_> {
+    type Item = u32;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        let curr = self.word_idx?;
+        let last = self.list.last_vacant_index_in_word(curr);
+        let first = self.list.get_ref(last).next();
+        // self.list.head_idx is always Some because, whenever self.list.head_idx is None,
+        // self.idx? of the first line will break this function.
+        if first != self.list.head_idx.unwrap() {
+            self.word_idx = Some(first / 64);
+        } else {
+            self.word_idx = None
+        }
+        Some(curr)
+    }
+}
+
 // TODO: Make memory-efficient.
 #[derive(Default, Clone)]
 pub struct ListItem {
     next: u32,
     prev: u32,
+    #[allow(dead_code)]
     used_base: bool,
+    #[allow(dead_code)]
     used_index: bool,
 }
 
@@ -256,21 +383,25 @@ impl ListItem {
         &mut self.prev
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     pub const fn is_used_base(&self) -> bool {
         self.used_base
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     pub const fn is_used_index(&self) -> bool {
         self.used_index
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     pub fn use_base(&mut self) {
         self.used_base = true;
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     pub fn use_index(&mut self) {
         self.used_index = true;

@@ -808,6 +808,24 @@ impl core::fmt::Debug for State {
 mod tests {
     use super::*;
 
+    fn test_double_array_internal(patterns: Vec<Vec<u8>>,
+                                  base_expected: Vec<Option<NonZeroU32>>,
+                                  check_expected: Vec<u8>,
+                                  fail_expected: Vec<u32>) {
+        let pma = DoubleArrayAhoCorasick::<u32>::new(patterns).unwrap();
+
+        let pma_base: Vec<_> = pma.states[0..11].iter().map(|state| state.base()).collect();
+        let pma_check: Vec<_> = pma.states[0..11]
+            .iter()
+            .map(|state| state.check())
+            .collect();
+        let pma_fail: Vec<_> = pma.states[0..11].iter().map(|state| state.fail()).collect();
+
+        assert_eq!(base_expected, pma_base);
+        assert_eq!(check_expected, pma_check);
+        assert_eq!(fail_expected, pma_fail);
+    }
+
     #[test]
     fn test_double_array() {
         /*
@@ -824,7 +842,6 @@ mod tests {
          *   c = 2
          */
         let patterns = vec![vec![0, 0], vec![0, 2], vec![1, 2], vec![2]];
-        let pma = DoubleArrayAhoCorasick::<u32>::new(patterns).unwrap();
 
         let base_expected = vec![
             NonZeroU32::new(4), // 0  (state=0)
@@ -866,16 +883,131 @@ mod tests {
             6,              // 10 (state=5)
         ];
 
-        let pma_base: Vec<_> = pma.states[0..11].iter().map(|state| state.base()).collect();
-        let pma_check: Vec<_> = pma.states[0..11]
-            .iter()
-            .map(|state| state.check())
-            .collect();
-        let pma_fail: Vec<_> = pma.states[0..11].iter().map(|state| state.fail()).collect();
+        test_double_array_internal(patterns, base_expected, check_expected, fail_expected);
+    }
 
-        assert_eq!(base_expected, pma_base);
-        assert_eq!(check_expected, pma_check);
-        assert_eq!(fail_expected, pma_fail);
+    /// This test be valid if enable basic find_base algorithm
+    // #[test]
+    // fn test_double_array_normal_find_base() {
+    //     /*
+    //      *          a--> 4
+    //      *         /
+    //      *   a--> 1 --c--> 5
+    //      *  /
+    //      * 0 --b--> 2 --f--> 6
+    //      *  \
+    //      *   c--> 3
+    //      *
+    //      *   a = 0
+    //      *   b = 1
+    //      *   c = 2
+    //      *   f = 5
+    //      */
+    //     let patterns = vec![vec![0, 0], vec![0, 2], vec![1, 5], vec![2]];
+    //
+    //     let base_expected = vec![
+    //         NonZeroU32::new(4), // 0  (state=0)
+    //         None,               // 1  (reserved)
+    //         None,               // 2  (state=6)
+    //         None,               // 3
+    //         NonZeroU32::new(8), // 4  (state=1)
+    //         NonZeroU32::new(7), // 5  (state=2)
+    //         None,               // 6  (state=3)
+    //         None,               // 7
+    //         None,               // 8  (state=4)
+    //         None,               // 9
+    //         None,               // 10 (state=5)
+    //     ];
+    //     let check_expected = vec![
+    //         0, // 0  (state=0)
+    //         1, // 1
+    //         5, // 2  (state=6)
+    //         3, // 3
+    //         0, // 4  (state=1)
+    //         1, // 5  (state=2)
+    //         2, // 6  (state=3)
+    //         7, // 7
+    //         0, // 8  (state=4)
+    //         9, // 9
+    //         2, // 10 (state=5)
+    //     ];
+    //     let fail_expected = vec![
+    //         ROOT_STATE_IDX, // 0  (state=0)
+    //         ROOT_STATE_IDX, // 1  (reserved)
+    //         ROOT_STATE_IDX, // 2  (state=6)
+    //         ROOT_STATE_IDX, // 3
+    //         ROOT_STATE_IDX, // 4  (state=1)
+    //         ROOT_STATE_IDX, // 5  (state=2)
+    //         ROOT_STATE_IDX, // 6  (state=3)
+    //         ROOT_STATE_IDX, // 7
+    //         4,              // 8  (state=4)
+    //         ROOT_STATE_IDX, // 9
+    //         6,              // 10 (state=5)
+    //     ];
+    //
+    //     test_double_array_internal(patterns, base_expected, check_expected, fail_expected);
+    // }
+
+    /// This test be valid if enable one of the bit-parallel-find_base (find_base_64_*) algorithm
+    #[test]
+    fn test_double_array_with_bpxcheck() {
+        /*
+         *          a--> 4
+         *         /
+         *   a--> 1 --c--> 5
+         *  /
+         * 0 --b--> 2 --f--> 6
+         *  \
+         *   c--> 3
+         *
+         *   a = 0
+         *   b = 1
+         *   c = 2
+         *   f = 5
+         */
+        let patterns = vec![vec![0, 0], vec![0, 2], vec![1, 5], vec![2]];
+
+        let base_expected = vec![
+            NonZeroU32::new(4), // 0  (state=0)
+            None,               // 1  (reserved)
+            None,               // 2
+            None,               // 3
+            NonZeroU32::new(8), // 4  (state=1)
+            NonZeroU32::new(2), // 5  (state=2)
+            None,               // 6  (state=3)
+            None,               // 7  (state=6)
+            None,               // 8  (state=4)
+            None,               // 9
+            None,               // 10 (state=5)
+        ];
+        let check_expected = vec![
+            0, // 0  (state=0)
+            1, // 1
+            2, // 2
+            3, // 3
+            0, // 4  (state=1)
+            1, // 5  (state=2)
+            2, // 6  (state=3)
+            5, // 7  (state=6)
+            0, // 8  (state=4)
+            9, // 9
+            2, // 10 (state=5)
+        ];
+        let fail_expected = vec![
+            ROOT_STATE_IDX, // 0  (state=0)
+            ROOT_STATE_IDX, // 1  (reserved)
+            ROOT_STATE_IDX, // 2
+            ROOT_STATE_IDX, // 3
+            ROOT_STATE_IDX, // 4  (state=1)
+            ROOT_STATE_IDX, // 5  (state=2)
+            ROOT_STATE_IDX, // 6  (state=3)
+            ROOT_STATE_IDX, // 7  (state=6)
+            4,              // 8  (state=4)
+            ROOT_STATE_IDX, // 9
+            6,              // 10 (state=5)
+        ];
+
+        test_double_array_internal(patterns, base_expected, check_expected, fail_expected);
     }
 
     #[test]

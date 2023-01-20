@@ -276,7 +276,12 @@ impl DoubleArrayAhoCorasickBuilder {
             labels.clear();
             s.edges.keys().for_each(|&k| labels.push(k));
 
-            let base = self.find_base(&labels, &helper);
+            // slow
+            // let base = self.find_base(&labels, &helper);
+            // faster
+            // let base = self.find_base_64_with_elm(&labels, &helper);
+            // fastest in practice
+            let base = self.find_base_64_sequential(&labels, &helper);
             if usize::from_u32(base.get()) >= self.states.len() {
                 self.extend_array(&mut helper)?;
             }
@@ -329,9 +334,11 @@ impl DoubleArrayAhoCorasickBuilder {
         helper.push_block().unwrap();
         helper.use_index(ROOT_STATE_IDX);
         helper.use_index(DEAD_STATE_IDX);
+        helper.use_base_zero(); // to limit NonZeroU32 base
         Ok(helper)
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     fn find_base(&self, labels: &[u8], helper: &BuildHelper) -> NonZeroU32 {
         for idx in helper.vacant_iter() {
@@ -344,6 +351,7 @@ impl DoubleArrayAhoCorasickBuilder {
         NonZeroU32::new(u32::try_from(self.states.len()).unwrap()).unwrap()
     }
 
+    #[allow(dead_code)]
     #[inline(always)]
     fn check_valid_base(base: u32, labels: &[u8], helper: &BuildHelper) -> Option<NonZeroU32> {
         if helper.is_used_base(base) {
@@ -356,6 +364,32 @@ impl DoubleArrayAhoCorasickBuilder {
             }
         }
         NonZeroU32::new(base)
+    }
+
+    #[inline(always)]
+    fn find_base_64_with_elm(&self, labels: &[u8], helper: &BuildHelper) -> NonZeroU32 {
+        for word_idx in helper.vacant_word_iter() {
+            let base_pin = word_idx * 64 ^ u32::from(labels[0]);
+            if let Some(base) = helper.verify_unique_base_64adjacent(base_pin, labels) {
+                return base
+            }
+        }
+        // len() is not 0 since states has at least BLOCK_LEN items.
+        NonZeroU32::new(u32::try_from(self.states.len()).unwrap()).unwrap()
+    }
+
+    #[inline(always)]
+    fn find_base_64_sequential(&self, labels: &[u8], helper: &BuildHelper) -> NonZeroU32 {
+        if let Some(word_head) = helper.vacant_word_iter().next() {
+            for word_idx in word_head..helper.active_index_range().end/64 {
+                let base_pin = word_idx * 64 ^ u32::from(labels[0]);
+                if let Some(base) = helper.verify_unique_base_64adjacent(base_pin, labels) {
+                    return base
+                }
+            }
+        }
+        // len() is not 0 since states has at least BLOCK_LEN items.
+        NonZeroU32::new(u32::try_from(self.states.len()).unwrap()).unwrap()
     }
 
     fn extend_array(&mut self, helper: &mut BuildHelper) -> Result<()> {
