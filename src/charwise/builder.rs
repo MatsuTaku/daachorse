@@ -279,9 +279,9 @@ impl CharwiseDoubleArrayAhoCorasickBuilder {
             // slow
             // let base = self.find_base(&mapped, &helper);
             // faster
-            // let base = self.find_base_64_with_elm(&mapped, &helper);
+            let base = self.find_base_64_with_elm(&mapped, &helper);
             // fastest
-            let base = self.find_base_64_sequential(&mapped, &helper);
+            // let base = self.find_base_64_sequential(&mapped, &helper);
             if self.states.len() <= usize::from_u32(base.get()) {
                 self.extend_array(&mut helper)?;
             }

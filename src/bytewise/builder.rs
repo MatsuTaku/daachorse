@@ -279,9 +279,9 @@ impl DoubleArrayAhoCorasickBuilder {
             // slow
             // let base = self.find_base(&labels, &helper);
             // faster
-            // let base = self.find_base_64_with_elm(&labels, &helper);
+            let base = self.find_base_64_with_elm(&labels, &helper);
             // fastest in practice
-            let base = self.find_base_64_sequential(&labels, &helper);
+            // let base = self.find_base_64_sequential(&labels, &helper);
             if usize::from_u32(base.get()) >= self.states.len() {
                 self.extend_array(&mut helper)?;
             }
